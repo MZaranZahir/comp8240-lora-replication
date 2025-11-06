@@ -42,5 +42,22 @@ matplotlib
   ```bash
   python scripts/eval_lora.py --dataset imdb
   ```
+
+# Train LoRA on SST-2 (replication)
+   ```bash
+   python scripts/train_lora.py --dataset sst2 --rank 8 --epochs 3 --batch_size 16 --lr 2e-5 --output_dir results/lora_out
+   ```
+# Train LoRA on IMDB (extension)
+```bash
+   python scripts/train_lora.py --dataset imdb --rank 8 --epochs 3 --batch_size 16 --lr 2e-5 --output_dir results/lora_out
+```
+# Evaluate a trained adapter
+```bash
+   python scripts/eval_lora.py --dataset imdb --adapter_dir results/lora_out/imdb_r8 --model_name roberta-base
+```
+# Print environment (optional)
+```bash
+python scripts/check_env.py
+```
 ## Reference
   Hu, E. J. et al. (2022). LoRA: Low-Rank Adaptation of Large Language Models. ICLR 2022.
