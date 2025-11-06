@@ -32,37 +32,26 @@ matplotlib
    ```
 
 ## Results
-| Dataset   | Accuracy (%) | F1 (%) | Trainable Params (%) |
-| --------- | ------------ | ------ | -------------------- |
-| SST-2     | 93.7         | 93.6   | 0.9                  |
-| IMDB      | 88.0         | 87.8   | 0.9                  |
-| IMDB-Mini | 89.6         | 89.2   | 0.9                  |
+| Dataset | Accuracy | F1 | Trainable % | Notes |
+|----------|-----------:|-----------:|-----------:|----------------|
+| IMDB | 92.74 | 92.74 | 0.70 | Sentiment classification |
+| AG News | 92.43 | 92.42 | 0.70 | Topic classification |
+| IMDB-Mini-Paraphrased | 89.6 | 89.2 | 0.70 | Synthetic back-translated set |
 
 ## Evaluate results:
   ```bash
   python scripts/eval_lora.py --dataset imdb
   ```
 ## 📓 Notebooks
-- [`notebooks/LoRA.ipynb`](notebooks/LoRA.ipynb) — contains full replication (SST-2) and extension experiments (IMDB, AG News, TREC, IMDB-Mini).
+- [`notebooks/LoRA.ipynb`](notebooks/LoRA.ipynb) — contains full replication (SST-2) and extension experiments (IMDB, AG News, IMDB-Mini).
   - Run directly in **Google Colab** using the "Open in Colab" badge below.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/<your-username>/comp8240-lora-replication/blob/main/notebooks/LoRA.ipynb)
 
-# Train LoRA on SST-2 (replication)
-   ```bash
-   python scripts/train_lora.py --dataset sst2 --rank 8 --epochs 3 --batch_size 16 --lr 2e-5 --output_dir results/lora_out
-   ```
-# Train LoRA on IMDB (extension)
+##  Environment
+Run:
 ```bash
-   python scripts/train_lora.py --dataset imdb --rank 8 --epochs 3 --batch_size 16 --lr 2e-5 --output_dir results/lora_out
-```
-# Evaluate a trained adapter
-```bash
-   python scripts/eval_lora.py --dataset imdb --adapter_dir results/lora_out/imdb_r8 --model_name roberta-base
-```
-# Print environment
-```bash
-python scripts/check_env.py
+pip install -r requirements.txt
 ```
 ## Reference
   Hu, E. J. et al. (2022). LoRA: Low-Rank Adaptation of Large Language Models. ICLR 2022.
