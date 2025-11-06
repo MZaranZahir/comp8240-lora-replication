@@ -1,4 +1,4 @@
-# Parameter-Efficient Fine-Tuning with LoRA: Replication and Extension
+# LoRA: Replication and Extension
 
 **Course:** COMP8240 – Project Report  
 **Author:** Muhammad Zaran Zahir (47997222)
@@ -7,11 +7,6 @@
 This project replicates the results of *Hu et al. (2022)* “Low-Rank Adaptation of Large Language Models (LoRA)” and extends them to new datasets (IMDB, AG News, TREC, IMDB-Mini-Paraphrased).  
 It explores reproducibility and efficiency trade-offs of parameter-efficient fine-tuning (PEFT).
 
-##  Structure
-scripts/ → training & evaluation scripts
-data_notes/ → dataset descriptions & sources
-results/ → output metrics, logs, plots
-report/ → LaTeX report + compiled PDF
 
 ##  Environment
 Developed on Google Colab Pro (T4 GPU, 16 GB VRAM).  
@@ -25,11 +20,52 @@ matplotlib
 
 
 ##  Usage
-1. Clone repo and install requirements  
-2. Run training:
-   ```bash
-   python scripts/train_lora.py --dataset sst2 --rank 8
-   ```
+# 1️⃣ Clone Repository
+```
+!git clone https://github.com/MZaranZahir/comp8240-lora-replication.git
+%cd comp8240-lora-replication
+```
+
+# 2️⃣ Install Dependencies (skip torch: Colab GPU already has it)
+```
+!grep -v -i '^torch' requirements.txt > req.no_torch.txt || cp requirements.txt req.no_torch.txt
+!pip install -r req.no_torch.txt
+!pip install tqdm matplotlib pandas
+```
+
+# 3️⃣ Verify Environment
+```
+!python scripts/check_env.py
+```
+ # Expected output includes:
+ torch: 2.x | cuda: True
+ transformers: 4.x.x
+ datasets: 4.x.x
+ scikit-learn: 1.x.x
+ peft: 0.x.x
+ gpu: Tesla T4 / A100
+
+
+# 4️⃣ Run Training (Choose Dataset)
+
+ SST-2 (Replication)
+!python scripts/train_lora.py --dataset sst2 --limit_train 2000 --limit_val 500 --epochs 1 --output_dir results
+
+ IMDB (Extension)
+!python scripts/train_lora.py --dataset imdb --limit_train 3000 --limit_val 1000 --epochs 1 --max_length 192 --output_dir results
+
+ AG News (Extension)
+!python scripts/train_lora.py --dataset ag_news --limit_train 6000 --limit_val 1500 --epochs 1 --max_length 128 --output_dir results
+
+# 5️⃣ Evaluate Trained Adapters 
+```
+!python scripts/eval_lora.py --dataset imdb --adapter_dir results/imdb_r8 --model_name roberta-base
+```
+
+# 6️⃣ View Output Metrics
+```
+!find results -type f -name "summary.csv" -or -name "metrics.json"
+```
 
 ## Results
 | Dataset | Accuracy | F1 | Trainable % | Notes |
