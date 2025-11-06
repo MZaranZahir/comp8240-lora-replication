@@ -1,118 +1,161 @@
-import argparse, os, random
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import argparse, os, random, json
 import numpy as np
 import torch
 
-from datasets import load_dataset
-from transformers import (AutoTokenizer, AutoModelForSequenceClassification,
-                          DataCollatorWithPadding, Trainer, TrainingArguments)
+from datasets import load_dataset, DatasetDict
+from transformers import (
+    AutoTokenizer, AutoModelForSequenceClassification,
+    DataCollatorWithPadding, Trainer, TrainingArguments
+)
 from peft import LoraConfig, get_peft_model
 from sklearn.metrics import accuracy_score, f1_score
 
+
+# -------------------------
+# Reproducibility
+# -------------------------
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+
+# -------------------------
+# Dataset routing
+# -------------------------
 DATASETS = {
-    "sst2": {"hf_path": ("glue", "sst2")},
-    "imdb": {"hf_path": ("imdb",)},
-    "ag_news": {"hf_path": ("ag_news",)}
+    "sst2":   {"hf": ("glue", "sst2")},
+    "imdb":   {"hf": ("imdb",)},
+    "ag_news":{"hf": ("ag_news",)},
 }
 
-def load_task(dataset_name: str):
-    if dataset_name not in DATASETS:
-        raise ValueError(f"Unsupported dataset: {dataset_name}. Choose from {list(DATASETS.keys())}")
-    path = DATASETS[dataset_name]["hf_path"]
-    ds = load_dataset(*path)
-
-    # Standardize columns: text_col, label_col
-    text_col = None
-    for cand in ["sentence", "text"]:
-        if cand in ds["train"].column_names:
-            text_col = cand
-            break
-    if text_col is None:
-        # attempt to find any string column
-        for c in ds["train"].column_names:
-            if ds["train"][c] and isinstance(ds["train"][c][0], str):
-                text_col = c; break
-    if text_col is None:
-        raise ValueError("Could not find text column.")
-
-    label_col = None
-    for cand in ["label", "coarse_label"]:
-        if cand in ds["train"].column_names:
-            label_col = cand
-            break
-    if label_col is None:
-        raise ValueError("Could not find label column.")
-
-    # For glue sst2 test split is 'validation'
-    test_split = "test" if "test" in ds else "validation"
-
+def load_task(name: str):
+    if name not in DATASETS:
+        raise ValueError(f"Unsupported dataset: {name}. Choose from {list(DATASETS.keys())}")
+    ds = load_dataset(*DATASETS[name]["hf"])
+    # text column
+    if "sentence" in ds["train"].column_names:
+        text_col = "sentence"
+    elif "text" in ds["train"].column_names:
+        text_col = "text"
+    else:
+        # fallback: first string column
+        text_col = next(
+            (c for c in ds["train"].column_names if isinstance(ds["train"][c][0], str)),
+            None
+        )
+        if text_col is None:
+            raise ValueError("Could not find a text column.")
+    # label column
+    if "label" in ds["train"].column_names:
+        label_col = "label"
+    elif "coarse_label" in ds["train"].column_names:
+        label_col = "coarse_label"
+    else:
+        raise ValueError("Could not find a label column.")
+    # num labels
     num_labels = len(set(ds["train"][label_col]))
-    return ds, text_col, label_col, test_split, num_labels
+    return ds, text_col, label_col, num_labels
 
+
+# -------------------------
+# Main
+# -------------------------
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--limit_train", type=int, default=0, help="Use only first N training rows (0 = full)")
-    parser.add_argument("--dataset", type=str, default="sst2", choices=["sst2","imdb","ag_news"])
-    parser.add_argument("--model_name", type=str, default="roberta-base")
-    parser.add_argument("--rank", type=int, default=8)
-    parser.add_argument("--alpha", type=float, default=16.0)
-    parser.add_argument("--dropout", type=float, default=0.05)
-    parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output_dir", type=str, default="results/lora_out")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", choices=["sst2","imdb","ag_news"], required=True)
+    ap.add_argument("--model_name", default="roberta-base")
+    ap.add_argument("--rank", type=int, default=8)
+    ap.add_argument("--alpha", type=int, default=16)
+    ap.add_argument("--dropout", type=float, default=0.05)
+    ap.add_argument("--lr", type=float, default=2e-5)
+    ap.add_argument("--batch_size", type=int, default=16)
+    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--max_length", type=int, default=256)
+    ap.add_argument("--limit_train", type=int, default=0, help="Use first N train rows (0 = all)")
+    ap.add_argument("--limit_val", type=int, default=0, help="Use first N val rows (0 = all)")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--output_dir", default="results")
+    ap.add_argument("--num_proc", type=int, default=2, help="Tokenization workers")
+    args = ap.parse_args()
 
     set_seed(args.seed)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device: {device}")
 
-    ds, text_col, label_col, test_split, num_labels = load_task(args.dataset)
+    # -------- Load + prepare splits
+    ds, text_col, label_col, num_labels = load_task(args.dataset)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
-    def tokenize(batch):
-        return tokenizer(batch[text_col], truncation=True, max_length=256)
+    # add validation if missing (IMDB/AG News)
+    if "validation" not in ds:
+        try:
+            split = ds["train"].train_test_split(test_size=0.1, seed=args.seed, stratify_by_column=label_col)
+        except Exception:
+            split = ds["train"].train_test_split(test_size=0.1, seed=args.seed)
+        ds = DatasetDict({"train": split["train"], "validation": split["test"], "test": ds["test"]})
 
-    ds = ds.map(tokenize, batched=True)
+    # IMPORTANT: GLUE/SST-2 public test has no labels → use validation for final metrics
+    test_split = "validation" if args.dataset == "sst2" else "test"
+
+    # -------- Tokenization
+    tok = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+
+    def tok_fn(batch):
+        return tok(batch[text_col], truncation=True, max_length=args.max_length)
+
+    ds = ds.map(tok_fn, batched=True, num_proc=args.num_proc)
     ds = ds.rename_column(label_col, "labels")
-    keep_cols = ["input_ids", "attention_mask", "labels"]
-    ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep_cols])
+
+    keep = ["input_ids", "attention_mask", "labels"]
+    ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep])
+
+    # Optional subsetting for speed
     if args.limit_train and args.limit_train > 0:
-        ds["train"] = ds["train"].select(range(min(args.limit_train, len(ds["train"]))))
+        n = min(args.limit_train, len(ds["train"]))
+        ds["train"] = ds["train"].shuffle(seed=args.seed).select(range(n))
+    if args.limit_val and args.limit_val > 0:
+        n = min(args.limit_val, len(ds["validation"]))
+        ds["validation"] = ds["validation"].shuffle(seed=args.seed).select(range(n))
 
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=num_labels)
-
-    lora_cfg = LoraConfig(
-        r=args.rank,
-        lora_alpha=int(args.alpha),
-        lora_dropout=args.dropout,
-        bias="none",
-        task_type="SEQ_CLS",
-        target_modules=["query", "value"]
+    # -------- Model + LoRA
+    base = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=num_labels)
+    lcfg = LoraConfig(
+        r=args.rank, lora_alpha=args.alpha, lora_dropout=args.dropout,
+        bias="none", task_type="SEQ_CLS", target_modules=["query","value"]
     )
-    model = get_peft_model(model, lora_cfg)
+    model = get_peft_model(base, lcfg)
 
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    trainable_pct = 100.0 * trainable_params / total_params
+    print(f"Trainable params: {trainable_params:,} / {total_params:,} ({trainable_pct:.2f}%)")
+
+    # -------- Trainer
+    collator = DataCollatorWithPadding(tokenizer=tok)
 
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
         preds = np.argmax(logits, axis=-1)
-        acc = accuracy_score(labels, preds)
-        f1 = f1_score(labels, preds, average="macro")
-        return {"accuracy": acc, "f1": f1}
+        return {
+            "accuracy": accuracy_score(labels, preds),
+            "f1": f1_score(labels, preds, average="macro")
+        }
 
-    output_dir = os.path.join(args.output_dir, f"{args.dataset}_r{args.rank}")
-    os.makedirs(output_dir, exist_ok=True)
+    run_dir = os.path.join(
+        args.output_dir,
+        f"{args.dataset}_r{args.rank}_ml{args.max_length}_bs{args.batch_size}"
+    )
+    os.makedirs(run_dir, exist_ok=True)
 
-    training_args = TrainingArguments(
-        output_dir=output_dir,
+    targs = TrainingArguments(
+        output_dir=run_dir,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        eval_strategy="epoch",
+        evaluation_strategy="epoch",
         save_strategy="epoch",
         learning_rate=args.lr,
         num_train_epochs=args.epochs,
@@ -120,41 +163,54 @@ def main():
         logging_steps=50,
         save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-        report_to=[]
-        fp16=True
+        metric_for_best_model="eval_accuracy",
+        greater_is_better=True,
+        report_to=[],
+        fp16=torch.cuda.is_available(),  # enable fp16 if GPU available
+        dataloader_num_workers=2,
+        dataloader_pin_memory=True
     )
 
     trainer = Trainer(
         model=model,
-        args=training_args,
+        args=targs,
         train_dataset=ds["train"],
-        eval_dataset=ds["validation"] if "validation" in ds else ds[test_split],
-        tokenizer=tokenizer,
-        data_collator=data_collator,
+        eval_dataset=ds["validation"],
+        tokenizer=tok,
+        data_collator=collator,
         compute_metrics=compute_metrics
     )
 
     trainer.train()
 
+    # -------- Final evaluation on held-out split
     metrics = trainer.evaluate(ds[test_split])
-    print(metrics)
+    print("Final metrics:", metrics)
 
-    trainer.save_model(output_dir)
-    with open(os.path.join(output_dir, "metrics.json"), "w") as f:
-        import json
+    # -------- Persist artifacts
+    trainer.save_model(run_dir)
+    with open(os.path.join(run_dir, "metrics.json"), "w") as f:
         json.dump({k: float(v) for k, v in metrics.items()}, f, indent=2)
 
-    import pandas as pd
-    row = {
-        "dataset": args.dataset,
-        "rank": args.rank,
-        "accuracy": metrics.get("eval_accuracy", None),
-        "f1": metrics.get("eval_f1", None),
-        "trainable_params_pct": 0.9
-    }
-    pd.DataFrame([row]).to_csv(os.path.join(output_dir, "summary.csv"), index=False)
-    print(f"Saved adapter and metrics to {output_dir}")
+    # summary row (CSV)
+    try:
+        import pandas as pd
+        row = {
+            "dataset": args.dataset,
+            "rank": args.rank,
+            "max_length": args.max_length,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "accuracy": float(metrics.get("eval_accuracy", 0.0)),
+            "f1": float(metrics.get("eval_f1", 0.0)),
+            "trainable_params_pct": round(trainable_pct, 2)
+        }
+        pd.DataFrame([row]).to_csv(os.path.join(run_dir, "summary.csv"), index=False)
+    except Exception as e:
+        print("Warning: could not write summary.csv:", e)
+
+    print(f"Saved model and metrics to: {run_dir}")
+
 
 if __name__ == "__main__":
     main()
