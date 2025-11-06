@@ -29,32 +29,36 @@ def main():
 
     ds, text_col, label_col, test_split = load_task(args.dataset)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
-    def tokenize(batch):
-        return tokenizer(batch[text_col], truncation=True, max_length=256)
-    ds = ds.map(tokenize, batched=True)
-    ds = ds.rename_column(label_col, "labels")
-    keep_cols = ["input_ids", "attention_mask", "labels"]
-    ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep_cols])
+def tokenize(batch):
+    return tokenizer(batch[text_col], truncation=True, max_length=256)
+ds = ds.map(tokenize, batched=True, num_proc=2)
 
-    base = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=len(set(ds["train"]["labels"])))
-    model = PeftModel.from_pretrained(base, args.adapter_dir)
+ds = ds.rename_column(label_col, "labels")
+keep_cols = ["input_ids", "attention_mask", "labels"]
+ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep_cols])
 
-    collator = DataCollatorWithPadding(tokenizer=tokenizer)
+base = AutoModelForSequenceClassification.from_pretrained(
+    args.model_name, num_labels=len(set(ds["train"]["labels"]))
+)
+model = PeftModel.from_pretrained(base, args.adapter_dir)
 
-    import torch
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()
-    all_preds, all_labels = [], []
-    from torch.utils.data import DataLoader
-    dl = DataLoader(ds[test_split], batch_size=32, shuffle=False, collate_fn=collator)
-    with torch.no_grad():
-        for batch in dl:
-            batch = {k: v.to(device) for k,v in batch.items()}
-            logits = model(**batch).logits
-            preds = torch.argmax(logits, dim=-1).cpu().numpy().tolist()
-            labels = batch["labels"].cpu().numpy().tolist()
-            all_preds.extend(preds); all_labels.extend(labels)
+from torch.utils.data import DataLoader
+collator = DataCollatorWithPadding(tokenizer=tokenizer)
+dl = DataLoader(ds[test_split], batch_size=32, shuffle=False, collate_fn=collator)
+
+import torch
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device).eval()
+
+all_preds, all_labels = [], []
+with torch.inference_mode():
+    for batch in dl:
+        batch = {k: v.to(device) for k, v in batch.items()}
+        logits = model(**batch).logits
+        preds = torch.argmax(logits, dim=-1).cpu().numpy().tolist()
+        labels = batch["labels"].cpu().numpy().tolist()
+        all_preds.extend(preds); all_labels.extend(labels)
+
 
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average="macro")
