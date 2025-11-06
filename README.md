@@ -42,6 +42,11 @@ matplotlib
   ```bash
   python scripts/eval_lora.py --dataset imdb
   ```
+## 📓 Notebooks
+- [`notebooks/LoRA.ipynb`](notebooks/LoRA.ipynb) — contains full replication (SST-2) and extension experiments (IMDB, AG News, TREC, IMDB-Mini).
+  - Run directly in **Google Colab** using the "Open in Colab" badge below.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/<your-username>/comp8240-lora-replication/blob/main/notebooks/LoRA.ipynb)
 
 # Train LoRA on SST-2 (replication)
    ```bash
@@ -55,7 +60,7 @@ matplotlib
 ```bash
    python scripts/eval_lora.py --dataset imdb --adapter_dir results/lora_out/imdb_r8 --model_name roberta-base
 ```
-# Print environment (optional)
+# Print environment
 ```bash
 python scripts/check_env.py
 ```
