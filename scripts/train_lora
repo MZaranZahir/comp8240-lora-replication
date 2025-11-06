@@ -57,6 +57,7 @@ def load_task(dataset_name: str):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--limit_train", type=int, default=0, help="Use only first N training rows (0 = full)")
     parser.add_argument("--dataset", type=str, default="sst2", choices=["sst2","imdb","ag_news","trec"])
     parser.add_argument("--model_name", type=str, default="roberta-base")
     parser.add_argument("--rank", type=int, default=8)
@@ -81,6 +82,8 @@ def main():
     ds = ds.rename_column(label_col, "labels")
     keep_cols = ["input_ids", "attention_mask", "labels"]
     ds = ds.remove_columns([c for c in ds["train"].column_names if c not in keep_cols])
+    if args.limit_train and args.limit_train > 0:
+        ds["train"] = ds["train"].select(range(min(args.limit_train, len(ds["train"]))))
 
     model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=num_labels)
 
@@ -110,7 +113,7 @@ def main():
         output_dir=output_dir,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         learning_rate=args.lr,
         num_train_epochs=args.epochs,
@@ -120,6 +123,7 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
         report_to=[]
+        fp16=True
     )
 
     trainer = Trainer(
