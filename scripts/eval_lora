@@ -8,8 +8,7 @@ def load_task(dataset_name: str):
     DATASETS = {
         "sst2": ("glue", "sst2"),
         "imdb": ("imdb",),
-        "ag_news": ("ag_news",),
-        "trec": ("trec",)
+        "ag_news": ("ag_news",)
     }
     if dataset_name not in DATASETS:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
@@ -23,7 +22,7 @@ def load_task(dataset_name: str):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset", required=True, choices=["sst2","imdb","ag_news","trec"])
+    ap.add_argument("--dataset", required=True, choices=["sst2","imdb","ag_news"])
     ap.add_argument("--adapter_dir", required=True, help="Path to the trained adapter dir")
     ap.add_argument("--model_name", default="roberta-base")
     args = ap.parse_args()
